@@ -76,6 +76,16 @@ earlier:
 3. `COSIGN_PASSWORD` - the value of the password provided to `cosign generate-key-pair`
    earlier 
 
+Now, that these set of sensitive information have been set on
+the repository it is advised that you remove the private key
+`cosign.key` from the filesystem, so it isn't leaked by an
+accidental commit to a public repository, mistakenly added to
+a built container image, or some other reason for credential leak.
+
+Furthermore, it is advised you keep a copy of the above sensitive
+information in the likes of a key management system, such as 1Password.
+You'll need access to all of them, including the public key.
+
 ## Sign a container image with Cosign and GitHub Actions
 
 Add the following to your GitHub Actions workflow, which handles
@@ -164,5 +174,129 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: cosign sign --key env://COSIGN_PRIVATE_KEY ${TAGS}
+```
+
+## Verifying a container image signature with Cosign
+
+Once the GitHub Action workflow completes successfully in building
+and signing the image at the GitHub Packages container registry
+we can proceed to verifying the container image signature.
+
+This step of verifying container image signatures is mostly reserved
+and to be used by end-users who consume the container images.
+Verifying Docker images or other OCI-compliant container images
+is performed in order to ensure that specific claims have been
+correctly signed and that overall provenance tested for integrity
+is correct 
+
+To verify the image, we will need access to the public key of the
+maintainer, which was used to sign the image. Since we have created
+this one in prior steps, it should be easily available on disk:
+
+```sh
+cosign verify ghcr.io/lirantal/dockly --key cosign.pub
+```
+
+This should output similar information to the following:
+
+```sh
+Verification for ghcr.io/lirantal/dockly:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+
+[{"critical":{"identity":{"docker-reference":"ghcr.io/lirantal/dockly"},"image":{"docker-manifest-digest":"sha256:3cb3a861c4077c63a48a523c1ab74c0e6e737fae112b8f8602718509385a74fd"},"type":"cosign container image signature"},"optional":null}]
+```
+
+Tip: you can pipe the output of `cosign verify` to the popular JSON
+querying tool `jq` and get a pretty-print version such as this:
+
+```sh
+cosign verify ghcr.io/lirantal/dockly --key cosign.pub  | jq
+
+Verification for ghcr.io/lirantal/dockly:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+[
+  {
+    "critical": {
+      "identity": {
+        "docker-reference": "ghcr.io/lirantal/dockly"
+      },
+      "image": {
+        "docker-manifest-digest": "sha256:3cb3a861c4077c63a48a523c1ab74c0e6e737fae112b8f8602718509385a74fd"
+      },
+      "type": "cosign container image signature"
+    },
+    "optional": null
+  }
+]
+```
+
+## Verify a container image provenance
+
+So far, we have confirmed that this specific container image
+tag was signed with the public key that we used. This is one 
+attestation with regards to a claim about the identity who
+published this Docker image.
+
+What if we also want to track further attestations, such as
+the source repository of this container image, and the specific
+build workflow origin and commit reference it is related to?
+
+You can look up the relevant information you wish to include
+as attestations for the overall container image provenance in
+[GitHub's Actions documentation about Contexts](https://docs.github.com/en/actions/learn-github-actions/contexts).
+
+I have updated the signing clause of the workflow file with
+the following claims to be added to the signature:
+
+```yaml
+      - name: Sign the published container image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          cosign sign --key env://COSIGN_PRIVATE_KEY ${TAGS} \
+            -a "repo=${{ github.repository }}" \
+            -a "workflow=${{ github.workflow }}" \
+            -a "ref=${{ github.sha }}" \
+            -a "actor=${{ github.actor }}" \
+            -a "build=${{ github.run_id }}"
+```
+
+Once the build completed successfully we can verify the container
+image along with the new attestations added to it in the `optional`
+field:
+
+```sh
+$ cosign verify ghcr.io/lirantal/dockly --key cosign.pub  | jq
+
+Verification for ghcr.io/lirantal/dockly:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+[
+  {
+    "critical": {
+      "identity": {
+        "docker-reference": "ghcr.io/lirantal/dockly"
+      },
+      "image": {
+        "docker-manifest-digest": "sha256:2bbff3db48fcae016aa2d2116834723591a40335f47be6df81c532170b45776b"
+      },
+      "type": "cosign container image signature"
+    },
+    "optional": {
+      "actor": "lirantal",
+      "build": "2535552796",
+      "ref": "a40c60c8dc6d8d970431606b87df01dc71486b6c",
+      "repo": "lirantal/dockly",
+      "workflow": "Docker: GitHub Packages"
+    }
+  }
+]
 ```
 

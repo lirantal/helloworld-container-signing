@@ -300,3 +300,7 @@ The following checks were performed on each of these signatures:
 ]
 ```
 
+
+## Contributing
+
+Please consult [CONTRIBUTING](./CONTRIBUTING.md) for guidelines on contributing to this project.
